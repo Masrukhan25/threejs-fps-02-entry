@@ -37,31 +37,66 @@ export function createBots(scene, world, combat, effects, audio) {
   const targetPos = new THREE.Vector3();
   const hitMeshes = [];
 
+  // Soldier figures: chest plate, shoulder pads, helmet with a glowing visor slit,
+  // backpack, belt, separate swinging legs, and a rifle held forward. The torso and
+  // head keep their v1 sizes and positions — they are the hit meshes, so hit
+  // detection is unchanged. Team colour reads on the torso and the armband.
   function makeMesh(team, personality) {
     const group = new THREE.Group();
     const teamColor = team === 'vanguard' ? PALETTE.vanguard : PALETTE.sentinel;
     const torsoMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(teamColor), roughness: 0.7 });
-    const headMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.ink), roughness: 0.5 });
     const darkMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.hairline), roughness: 0.8 });
+    const gunMat = new THREE.MeshStandardMaterial({ color: new THREE.Color('#23262b'), roughness: 0.35, metalness: 0.8 });
+    const visorMat = new THREE.MeshStandardMaterial({ color: new THREE.Color('#0a1a24'), roughness: 0.1, metalness: 0.4, emissive: new THREE.Color(teamColor), emissiveIntensity: 0.9 });
+    const bandMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(teamColor) });
     const torso = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.78, 0.3), torsoMat);
     torso.position.y = 1.0;
     torso.castShadow = true;
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), headMat);
+    const plate = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.5, 0.06), darkMat);
+    plate.position.set(0, 1.05, -0.16);
+    const padL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.1, 0.32), darkMat);
+    padL.position.set(-0.3, 1.36, 0);
+    const padR = padL.clone();
+    padR.position.x = 0.3;
+    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.09, 0.32), darkMat);
+    belt.position.y = 0.66;
+    const pack = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.55, 0.14), darkMat);
+    pack.position.set(0, 1.08, 0.22);
+    const band = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.07, 0.34), bandMat);
+    band.position.set(-0.28, 1.22, 0);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 10), darkMat);
     head.position.y = 1.55;
     head.castShadow = true;
-    const gun = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.09, 0.5), darkMat);
-    gun.position.set(0.2, 1.25, -0.3);
-    const legs = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.5, 0.28), darkMat);
-    legs.position.y = 0.25;
-    group.add(torso, head, gun, legs);
+    const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.185, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), torsoMat);
+    helmet.position.y = 1.57;
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.05, 0.06), visorMat);
+    visor.position.set(0, 1.55, -0.15);
+    const gun = new THREE.Group();
+    const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.09, 0.42), gunMat);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.24, 8), gunMat);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0, 0.01, -0.3);
+    const mag = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.14, 0.08), darkMat);
+    mag.position.set(0, -0.1, 0.02);
+    mag.rotation.x = 0.2;
+    gun.add(receiver, barrel, mag);
+    gun.position.set(0.18, 1.22, -0.28);
+    gun.rotation.x = -0.06;
+    const legL = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.52, 0.26), darkMat);
+    legL.position.set(-0.11, 0.52, 0);
+    legL.geometry.translate(0, -0.26, 0);
+    const legR = legL.clone();
+    legR.position.x = 0.11;
+    group.add(torso, plate, padL, padR, belt, pack, band, head, helmet, visor, gun, legL, legR);
     scene.add(group);
-    return { group, torso, head };
+    return { group, torso, head, legL, legR, gun };
   }
 
   function spawnBot(team, personality, x, z, weaponId) {
     const def = WEAPONS.find((w) => w.id === weaponId) || WEAPONS[0];
     const mesh = makeMesh(team, personality);
     const bot = {
+      isBot: true,
       team,
       personality,
       def,
@@ -91,6 +126,7 @@ export function createBots(scene, world, combat, effects, audio) {
       strafeDir: 1,
       strafeAt: 0,
       fall: 0,
+      walkPhase: 0,
       dest: null,
       speed: WALK * PERSONALITY[personality].speed,
     };
@@ -303,6 +339,20 @@ export function createBots(scene, world, combat, effects, audio) {
     }
     bot.mesh.group.position.copy(bot.position);
     bot.mesh.group.rotation.set(0, bot.yaw, 0);
+    // Walk cycle: legs swing in opposition, torso bobs, the gun counter-sways.
+    // Dead bots lie flat (fall), so the walk is skipped for them.
+    if (bot.alive && (mx || mz)) {
+      bot.walkPhase += dt * bot.speed * 2.4;
+      const swing = Math.sin(bot.walkPhase) * 0.5;
+      bot.mesh.legL.rotation.x = swing;
+      bot.mesh.legR.rotation.x = -swing;
+      bot.mesh.group.position.y = bot.position.y + Math.abs(Math.cos(bot.walkPhase)) * 0.03;
+      bot.mesh.gun.rotation.x = -0.06 + Math.sin(bot.walkPhase * 2) * 0.04;
+    } else if (bot.alive) {
+      bot.mesh.legL.rotation.x *= 0.8;
+      bot.mesh.legR.rotation.x *= 0.8;
+      bot.mesh.gun.rotation.x = -0.06;
+    }
 
     // Grenade: throw at last seen enemy position when close and unseen.
     if (bot.grenades > 0 && bot.lastSeen && !bot.target && time - bot.lastSeenAt < 4 && time > bot.nadeAt) {

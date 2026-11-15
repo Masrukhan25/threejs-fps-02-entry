@@ -13,6 +13,7 @@ import { createBots } from './bots.js';
 import { createRounds } from './rounds.js';
 import { createHud } from './hud.js';
 import { PALETTE } from './palette.js';
+import { loadQuality, saveQuality, applyQuality } from './quality.js';
 
 const FIXED = 1 / 60;
 const params = new URLSearchParams(location.search);
@@ -33,12 +34,13 @@ const rng = DEMO ? mulberry32(SEED) : Math.random;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.35;
 document.getElementById('app').appendChild(renderer.domElement);
+// Graphics level, read before the first frame (saved choice, else HIGH).
+let qualityLevel = loadQuality();
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(PALETTE.canvas);
@@ -48,6 +50,18 @@ camera.rotation.order = 'YXZ';
 scene.add(camera);
 
 const world = createWorld(scene);
+applyQuality(renderer, world, qualityLevel);
+// The start-screen buttons switch the level live and save the choice.
+for (const btn of document.querySelectorAll('#quality-row button')) {
+  if (btn.dataset.quality === qualityLevel) btn.classList.add('on');
+  else btn.classList.remove('on');
+  btn.addEventListener('click', () => {
+    qualityLevel = btn.dataset.quality;
+    saveQuality(qualityLevel);
+    applyQuality(renderer, world, qualityLevel);
+    for (const b of document.querySelectorAll('#quality-row button')) b.classList.toggle('on', b === btn);
+  });
+}
 const effects = createEffects(scene, camera);
 const audio = createAudio();
 const input = createInput(renderer.domElement, (locked) => {
@@ -330,7 +344,8 @@ function step(dt, time) {
   } else {
     hud.hideScoreboard();
   }
-  arsenal.step(dt);
+  // Weapon feel: sway follows the mouse, bob follows the stride.
+  arsenal.step(dt, player.groundSpeed(), look.x, look.y);
   combat.step(dt);
   bots.step(dt, time, { actors, smokes: effects.smokeCenters(), bomb: combat.bomb, hittables: botHittables });
   rounds.step(dt, {
@@ -345,6 +360,8 @@ function updateCamera() {
   const p = player.state;
   if (p.alive) {
     camera.position.set(p.position.x, p.position.y + p.eye, p.position.z);
+    // Subtle head bob while moving on foot — never in DEMO shots.
+    if (!DEMO && p.onGround) camera.position.y += Math.sin(time * 9) * 0.014 * Math.min(1, player.groundSpeed() / 5);
     camera.rotation.set(p.pitch, p.yaw, 0);
   } else {
     const mate = bots.bots.find((b) => b.team === 'vanguard' && b.alive);
@@ -377,6 +394,7 @@ function hudSnapshot() {
     health: p.health,
     armor: p.armor,
     mag: a.mag,
+    magMax: arsenal.def().mag,
     reserve: a.reserve,
     weaponName: arsenal.def().name,
     frag: arsenal.grenades.frag,
@@ -396,10 +414,20 @@ function hudSnapshot() {
 let last = performance.now();
 let acc = 0;
 let time = 0;
+// Rolling performance readout (FPS + frame ms over the last 60 frames).
+const perf = { fps: 0, frameMs: 0, frames: 0, accMs: 0 };
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
+  perf.frames += 1;
+  perf.accMs += dt * 1000;
+  if (perf.frames >= 60) {
+    perf.frameMs = perf.accMs / perf.frames;
+    perf.fps = 1000 / perf.frameMs;
+    perf.frames = 0;
+    perf.accMs = 0;
+  }
   if (!paused) {
     acc += dt;
     let n = 0;
@@ -452,6 +480,8 @@ window.__ironveil = {
   input: input.state,
   bomb: combat.bomb,
   bots,
+  perf,
+  quality: () => qualityLevel,
 };
 
 // Boot.
@@ -489,6 +519,28 @@ if (DEMO) {
     player.state.pitch = -0.05;
     combat.forcePlant(BOMB_SITES.A, 18);
     hud.showAnnouncement('BOMB PLANTED', 'Site A — defend it', 8000);
+  }
+  // Stage the shot with effects only (no sim hooks): the DEMO boot never steps
+  // again after this, so everything triggered here is frozen at paint time.
+  if (SHOT === 'play') {
+    const foe = bots.bots.find((b) => b.team === 'sentinel' && b.alive);
+    if (foe) {
+      const from = new THREE.Vector3(-16, 1.5, 2);
+      const to = new THREE.Vector3(foe.position.x, foe.position.y + 1.2, foe.position.z);
+      effects.tracer(from, to);
+      effects.muzzle(new THREE.Vector3(foe.position.x, foe.position.y + 1.35, foe.position.z));
+    }
+    effects.smokeCloud(-14, 0, -6, 2.2, 12);
+  } else if (SHOT === 'end') {
+    // Defending the planted bomb: smoke drifting across the site and a Sentinel
+    // firing at the player from the warehouse doorway.
+    effects.smokeCloud(-1, 0, -11, 2, 12);
+    const foe = bots.bots.find((b) => b.team === 'sentinel' && b.alive);
+    if (foe) {
+      const from = new THREE.Vector3(foe.position.x, foe.position.y + 1.35, foe.position.z);
+      effects.tracer(from, new THREE.Vector3(2, 1.4, -10));
+      effects.muzzle(from);
+    }
   }
   if (SHOT === 'play' || SHOT === 'start') hud.hideAnnouncement();
   let painted = 0;

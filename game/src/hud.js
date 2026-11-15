@@ -1,6 +1,6 @@
 // HUD: all DOM updates. The game sim never touches the DOM directly; main.js calls
 // update() once per frame with a flat snapshot, and the one-shot helpers for events.
-// Buy menu items are built once from the weapon/grenade tables.
+// Buy menu items are built once from the weapon/grenade tables, with a damage bar.
 import { WEAPONS, GRENADES } from './weapons.js';
 
 function el(id) {
@@ -15,6 +15,7 @@ export function createHud(onBuy) {
     roundNum: el('round-num'),
     healthBar: el('health-bar'),
     healthNum: el('health-num'),
+    armorBar: el('armor-bar'),
     armorNum: el('armor-num'),
     ammoMag: el('ammo-mag'),
     ammoReserve: el('ammo-reserve'),
@@ -49,7 +50,8 @@ export function createHud(onBuy) {
     if (w.price === 0) continue;
     const div = document.createElement('div');
     div.className = 'buy-item';
-    div.innerHTML = `<b>${w.name}</b><span>${w.kind} — ${w.dmg} dmg · ${w.mag} rnd</span><i>$${w.price}</i>`;
+    const dmgPct = Math.min(100, Math.round((w.dmg * (w.pellets || 1)) / 120 * 100));
+    div.innerHTML = `<b>${w.name}</b><span>${w.kind} — ${w.dmg} dmg · ${w.mag} rnd · ${w.auto ? 'AUTO' : 'SEMI'}</span><i>$${w.price}</i><span class="stat"><u style="width:${dmgPct}%"></u></span>`;
     div.addEventListener('click', () => onBuy('weapon', w.id));
     els.buyItems.appendChild(div);
     items.push(div);
@@ -57,7 +59,7 @@ export function createHud(onBuy) {
   for (const g of GRENADES) {
     const div = document.createElement('div');
     div.className = 'buy-item';
-    div.innerHTML = `<b>${g.name}</b><span>${g.id === 'frag' ? 'explosive' : 'blocks sight'} — max 2</span><i>$${g.price}</i>`;
+    div.innerHTML = `<b>${g.name}</b><span>${g.id === 'frag' ? 'explosive — clears a site' : 'blocks sight for 12s'} — max 2</span><i>$${g.price}</i>`;
     div.addEventListener('click', () => onBuy('grenade', g.id));
     els.buyItems.appendChild(div);
     items.push(div);
@@ -93,18 +95,22 @@ export function createHud(onBuy) {
       els.scoreS.textContent = s.sentinelWins;
       els.roundNum.textContent = `ROUND ${s.round} / 15`;
       els.healthBar.style.width = `${s.health}%`;
+      els.healthBar.className = s.health <= 25 ? 'low' : s.health <= 55 ? 'mid' : '';
       els.healthNum.textContent = `${Math.ceil(s.health)}`;
+      els.healthNum.classList.toggle('low', s.health <= 25);
+      els.armorBar.style.width = `${Math.min(100, s.armor)}%`;
       els.armorNum.textContent = s.armor > 0 ? `ARMOR ${Math.ceil(s.armor)}` : '';
+      els.vignette.classList.toggle('lowhp', s.health <= 25 && s.health > 0);
       els.ammoMag.textContent = s.mag;
-      els.ammoReserve.textContent = s.reserve;
+      els.ammoMag.classList.toggle('low', s.mag <= Math.max(2, Math.ceil(s.magMax * 0.2)));
+      els.ammoReserve.textContent = ` / ${s.reserve}`;
       els.weaponName.textContent = s.weaponName;
-      els.grenades.textContent = `FRAG ${s.frag} · SMOKE ${s.smoke}`;
+      els.grenades.innerHTML = `FRAG <span class="pip">${'●'.repeat(s.frag)}${'○'.repeat(2 - s.frag)}</span> · SMOKE <span class="pip">${'●'.repeat(s.smoke)}${'○'.repeat(2 - s.smoke)}</span>`;
       els.objective.textContent = s.objective;
       els.bombTimer.textContent = s.bombFuse > 0 ? `BOMB ${s.bombFuse.toFixed(0)}s` : '';
       els.crosshair.style.setProperty('--spread', `${s.spread}px`);
       els.buyMoney.textContent = `$${s.money}`;
-      const showBuy = s.buyOpen;
-      els.buyMenu.classList.toggle('show', showBuy);
+      els.buyMenu.classList.toggle('show', s.buyOpen);
       els.plantBar.style.width = `${s.plant * 100}%`;
       els.defuseBar.style.width = `${s.defuse * 100}%`;
       els.plantBar.parentElement.style.display = s.plant > 0 ? 'block' : 'none';
@@ -133,7 +139,7 @@ export function createHud(onBuy) {
     },
     showScoreboard(rows) {
       els.scoreboard.classList.toggle('show', true);
-      els.scoreRows.innerHTML = rows.map((r) => `<div class="sb-row ${r.team}"><span>${r.name}</span><span>${r.kills} / ${r.deaths}</span><span>${r.alive ? 'ALIVE' : 'DEAD'}</span></div>`).join('');
+      els.scoreRows.innerHTML = rows.map((r) => `<div class="sb-row ${r.team}"><span>${r.name}</span><span>${r.kills} / ${r.deaths}</span><span class="${r.alive ? '' : 'dead'}">${r.alive ? 'ALIVE' : 'DEAD'}</span></div>`).join('');
     },
     hideScoreboard() {
       els.scoreboard.classList.remove('show');

@@ -38,6 +38,8 @@ export function createCombat(scene, world, effects, audio, hooks) {
 
   function fire(shooter, def, from, aimDir, spread, random, hittables) {
     let hitAny = null;
+    // Bots get a visible muzzle glint at their gun; the player has the view-model flash.
+    if (shooter && shooter.isBot) effects.muzzle(from);
     for (let p = 0; p < def.pellets; p += 1) {
       dir.copy(aimDir);
       dir.x += (random() * 2 - 1) * spread;
@@ -69,7 +71,7 @@ export function createCombat(scene, world, effects, audio, hooks) {
         hitAny = { actor: ud.actor, part: ud.part, killed, dmg };
         hooks.onHit(shooter, ud.actor, ud.part, killed);
       } else {
-        effects.impact(hit.point, hit.face ? hit.face.normal : new THREE.Vector3(0, 1, 0));
+        effects.impact(hit.point, hit.face ? hit.face.normal : new THREE.Vector3(0, 1, 0), ud.surface || 'concrete');
       }
     }
     return hitAny;
